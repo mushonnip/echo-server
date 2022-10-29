@@ -1,16 +1,13 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
 	"os/signal"
-
-	"github.com/go-playground/validator"
 )
 
 func main() {
@@ -51,52 +48,52 @@ func main() {
 func echo(conn net.Conn) {
 	defer conn.Close()
 	log.Printf("Connected: %s\n", conn.RemoteAddr().Network())
+	for {
+		message, err := bufio.NewReader(conn).ReadString('\n')
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		fmt.Print("Message Received:", string(message))
 
-	buf := &bytes.Buffer{}
-	_, err := io.Copy(buf, conn)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-
-	incomingString := buf.String()
-	fmt.Println("Request: " + incomingString)
-
-	buf.Reset()
-
-	type RequestFormat struct {
-		Id     int    `json:"id"`
-		Method string `json:"method" validate:"required"`
-		Params struct {
+		type Params struct {
 			Message string `json:"message" validate:"required"`
-		} `json:"params" validate:"required"`
+		}
+
+		type RequestFormat struct {
+			Id     int    `json:"id"`
+			Method string `json:"method" validate:"required"`
+			Params Params `json:"params" validate:"required"`
+		}
+
+		var requestFormat RequestFormat
+
+		if err := json.Unmarshal([]byte(message), &requestFormat); err != nil {
+			log.Printf("Error unmarshalling request: %s\n", err.Error())
+			return
+		}
+
+		type ResponseFormat struct {
+			Id     int `json:"id"`
+			Result struct {
+				Message string `json:"message"`
+			} `json:"result"`
+		}
+
+		var responseFormat ResponseFormat
+
+		responseFormat.Id = requestFormat.Id
+		responseFormat.Result.Message = requestFormat.Params.Message
+
+		response, err := json.Marshal(responseFormat)
+		log.Print(string(response))
+		if err != nil {
+			log.Printf("Error marshalling response: %s\n", err.Error())
+			return
+		}
+		conn.Write([]byte(string(response) + "\n"))
 	}
 
-	// Unmarshal the incoming JSON
-	var requestFormat RequestFormat
-	err = json.Unmarshal([]byte(incomingString), &requestFormat)
-	if err != nil {
-		fmt.Println(err.Error())
-	}
-
-	validate := validator.New()
-	err = validate.Struct(requestFormat)
-	if err != nil {
-		fmt.Println(err.Error())
-		conn.Close() // disconnect the client
-	}
-
-	// Echo to the client
-	// buf.WriteString(fmt.Sprintf(`{"id": %d, "result": {"message": "%s"}}\n`, requestFormat.Id, requestFormat.Params.Message))
-	buf.Write([]byte(fmt.Sprintf(`{"id": %d, "result": {"message": "%s"}}`, requestFormat.Id, requestFormat.Params.Message)))
-
-	_, err = io.Copy(conn, buf)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-
-	fmt.Println("Response: ", fmt.Sprintf(`{"id":%d,"result":{"message":"%s"}}`, requestFormat.Id, requestFormat.Params.Message))
 }
 
 func cleanup(sockAddr string) {
